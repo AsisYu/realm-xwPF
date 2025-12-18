@@ -20,6 +20,7 @@ WS_HOST=""
 
 RULE_ID=""
 RULE_NAME=""
+LAST_CONFIG_EMPTY="false"
 
 REQUIRED_TOOLS=("curl" "wget" "tar" "grep" "cut" "bc" "jq")
 
@@ -6196,6 +6197,7 @@ generate_endpoints_from_rules() {
 generate_realm_config() {
     echo -e "${YELLOW}正在生成 Realm 配置文件...${NC}"
 
+    LAST_CONFIG_EMPTY="false"
     mkdir -p "$CONFIG_DIR"
 
     init_rules_dir
@@ -6216,6 +6218,7 @@ generate_realm_config() {
     fi
 
     if [ "$has_rules" = false ]; then
+        LAST_CONFIG_EMPTY="true"
         echo -e "${BLUE}未找到启用的规则，生成空配置${NC}"
         generate_complete_config ""
         echo -e "${GREEN}✓ 空配置文件已生成${NC}"
@@ -6458,7 +6461,19 @@ service_restart() {
     generate_realm_config
 
     if systemctl restart realm; then
-        echo -e "${GREEN}✓ Realm 服务重启成功${NC}"
+        if systemctl is-active realm >/dev/null 2>&1; then
+            echo -e "${GREEN}✓ Realm 服务重启成功${NC}"
+        else
+            if [ "$LAST_CONFIG_EMPTY" = "true" ]; then
+                echo -e "${YELLOW}⚠ 未配置转发规则，服务未启动。请先通过菜单2添加规则${NC}"
+                return 1
+            else
+                echo -e "${RED}❌ 服务启动失败，请查看日志${NC}"
+                echo -e "${BLUE}查看详细错误信息:${NC}"
+                systemctl status realm --no-pager -l
+                return 1
+            fi
+        fi
     else
         echo -e "${RED}✗ Realm 服务重启失败${NC}"
         echo -e "${BLUE}查看详细错误信息:${NC}"
@@ -6475,12 +6490,30 @@ service_status() {
     # 获取服务状态
     local status=$(systemctl is-active realm 2>/dev/null)
     local enabled=$(systemctl is-enabled realm 2>/dev/null)
+    local has_rules=false
+    local enabled_count=0
+
+    # 先检查是否有规则配置
+    if [ -d "$RULES_DIR" ]; then
+        for rule_file in "${RULES_DIR}"/rule-*.conf; do
+            if [ -f "$rule_file" ]; then
+                if read_rule_file "$rule_file" && [ "$ENABLED" = "true" ]; then
+                    has_rules=true
+                    enabled_count=$((enabled_count + 1))
+                fi
+            fi
+        done
+    fi
 
     # 显示基本状态
     if [ "$status" = "active" ]; then
         echo -e "运行状态: ${GREEN}●${NC} 运行中"
     elif [ "$status" = "inactive" ]; then
-        echo -e "运行状态: ${RED}●${NC} 已停止"
+        if [ "$has_rules" = true ]; then
+            echo -e "运行状态: ${RED}●${NC} 已停止"
+        else
+            echo -e "运行状态: ${YELLOW}●${NC} 未配置 (需要添加转发规则)"
+        fi
     elif [ "$status" = "failed" ]; then
         echo -e "运行状态: ${RED}●${NC} 运行失败"
     else
@@ -6495,21 +6528,6 @@ service_status() {
 
     echo ""
     echo -e "${BLUE}配置信息:${NC}"
-
-    # 检查是否有规则配置
-    local has_rules=false
-    local enabled_count=0
-
-    if [ -d "$RULES_DIR" ]; then
-        for rule_file in "${RULES_DIR}"/rule-*.conf; do
-            if [ -f "$rule_file" ]; then
-                if read_rule_file "$rule_file" && [ "$ENABLED" = "true" ]; then
-                    has_rules=true
-                    enabled_count=$((enabled_count + 1))
-                fi
-            fi
-        done
-    fi
 
     if [ "$has_rules" = true ]; then
         echo -e "配置模式: ${GREEN}多规则模式${NC}"
