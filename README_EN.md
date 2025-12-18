@@ -83,7 +83,7 @@ DTAG
  ⬇️ UDP Down │ 10.0 Mbps (1.2 MB/s)      │ 0/26335 (0%)              │ 0.040 ms
 
 ─────────────────────────────────────────────────────────────────
-Test completion time: 2025-08-28 20:12:29 | Script open source: https://github.com/zywe03/realm-xwPF
+Test completion time: 2025-08-28 20:12:29 | Script open source: https://github.com/AsisYu/realm-xwPF
 ```
 
 </details>
@@ -93,13 +93,13 @@ Test completion time: 2025-08-28 20:12:29 | Script open source: https://github.c
 ### One-Click Installation
 
 ```bash
-wget -qO- https://raw.githubusercontent.com/zywe03/realm-xwPF/main/xwPF.sh | sudo bash -s install
+wget -qO- https://raw.githubusercontent.com/AsisYu/realm-xwPF/main/xwPF.sh | sudo bash -s install
 ```
 
 ### Network Restricted Use Accelerated Source, One-Click Installation
 
 ```bash
-wget -qO- https://ghfast.top/https://raw.githubusercontent.com/zywe03/realm-xwPF/main/xwPF.sh | sudo bash -s install
+wget -qO- https://ghfast.top/https://raw.githubusercontent.com/AsisYu/realm-xwPF/main/xwPF.sh | sudo bash -s install
 ```
 
 ## Offline Installation for No Network Access
@@ -112,7 +112,7 @@ Suitable for completely network-disconnected environments
 **Download Required Files**
 
 Download the following files on a device with network access:
-- **Script File Download**: [xwPF.sh](https://github.com/zywe03/realm-xwPF/raw/main/xwPF.sh) (Right-click → Save as)
+- **Script File Download**: [xwPF.sh](https://github.com/AsisYu/realm-xwPF/raw/main/xwPF.sh) (Right-click → Save as)
 - **Realm Program Download** (choose according to system architecture):
 
 | Architecture | Applicable Systems | Download Link | Detection Command |
@@ -350,11 +350,11 @@ File organization structure after installation:
 
 - **Other Open Source Projects:** [https://github.com/zywe03](https://github.com/zywe03)
 - **Author Homepage:** [https://zywe.de](https://zywe.de)
-- **Issue Feedback:** [GitHub Issues](https://github.com/zywe03/realm-xwPF/issues)
+- **Issue Feedback:** [GitHub Issues](https://github.com/AsisYu/realm-xwPF/issues)
 - **Casual Chat Group** [TG Chat Group](https://t.me/zywe_chat)
 
 ---
 
 **⭐ If this project helps you, please give it a Star for support!**
 
-[![Star History Chart](https://api.star-history.com/svg?repos=zywe03/realm-xwPF&type=Date)](https://www.star-history.com/#zywe03/realm-xwPF&Date)
+[![Star History Chart](https://api.star-history.com/svg?repos=AsisYu/realm-xwPF&type=Date)](https://www.star-history.com/#AsisYu/realm-xwPF&Date)

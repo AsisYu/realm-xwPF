@@ -1339,7 +1339,7 @@ generate_final_report() {
     echo ""
     echo -e "─────────────────────────────────────────────────────────────────"
 
-    echo -e "测试完成时间: $(TZ='Asia/Shanghai' date '+%Y-%m-%d %H:%M:%S') | 脚本开源地址：https://github.com/zywe03/realm-xwPF"
+    echo -e "测试完成时间: $(TZ='Asia/Shanghai' date '+%Y-%m-%d %H:%M:%S') | 脚本开源地址：https://github.com/AsisYu/realm-xwPF"
     echo -e "${WHITE}按任意键返回主菜单...${NC}"
     read -n 1 -s
 }
@@ -1551,7 +1551,7 @@ manual_update_script() {
     # 从GitHub下载最新版本
     echo -e "${BLUE}正在从GitHub下载最新脚本...${NC}"
 
-    local script_url="https://raw.githubusercontent.com/zywe03/realm-xwPF/main/speedtest.sh"
+    local script_url="https://raw.githubusercontent.com/AsisYu/realm-xwPF/main/speedtest.sh"
 
     # 使用统一多源下载函数
     if download_from_sources "$script_url" "$current_script"; then

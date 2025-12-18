@@ -89,7 +89,7 @@ pf                           # Main menu
 dog                          # Port traffic dog menu
 
 # One-line installation
-wget -qO- https://raw.githubusercontent.com/zywe03/realm-xwPF/main/xwPF.sh | sudo bash -s install
+wget -qO- https://raw.githubusercontent.com/AsisYu/realm-xwPF/main/xwPF.sh | sudo bash -s install
 ```
 
 ### Service Management

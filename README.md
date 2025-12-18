@@ -83,7 +83,7 @@ DTAG
  ⬇️ UDP下行 │ 10.0 Mbps (1.2 MB/s)      │ 0/26335 (0%)              │ 0.040 ms                 
 
 ─────────────────────────────────────────────────────────────────
-测试完成时间: 2025-08-28 20:12:29 | 脚本开源地址：https://github.com/zywe03/realm-xwPF
+测试完成时间: 2025-08-28 20:12:29 | 脚本开源地址：https://github.com/AsisYu/realm-xwPF
 ```
 
 </details>
@@ -93,13 +93,13 @@ DTAG
 ### 一键安装
 
 ```bash
-wget -qO- https://raw.githubusercontent.com/zywe03/realm-xwPF/main/xwPF.sh | sudo bash -s install
+wget -qO- https://raw.githubusercontent.com/AsisYu/realm-xwPF/main/xwPF.sh | sudo bash -s install
 ```
 
 ### 网络受限使用加速源,一键安装
 
 ```bash
-wget -qO- https://ghfast.top/https://raw.githubusercontent.com/zywe03/realm-xwPF/main/xwPF.sh | sudo bash -s install
+wget -qO- https://ghfast.top/https://raw.githubusercontent.com/AsisYu/realm-xwPF/main/xwPF.sh | sudo bash -s install
 ```
 
 ## 无法联网的离线安装
@@ -112,7 +112,7 @@ wget -qO- https://ghfast.top/https://raw.githubusercontent.com/zywe03/realm-xwPF
 **下载必要文件**
 
 在有网络的设备上下载以下文件：
-- **脚本文件下载**：[xwPF.sh](https://github.com/zywe03/realm-xwPF/raw/main/xwPF.sh) (右键点击 → 另存为)
+- **脚本文件下载**：[xwPF.sh](https://github.com/AsisYu/realm-xwPF/raw/main/xwPF.sh) (右键点击 → 另存为)
 - **Realm 程序下载**（根据系统架构选择）：
 
 | 架构 | 适用系统 | 下载链接 | 检测命令 |
@@ -350,11 +350,11 @@ IP地址：MPTCP协议需要知道可以使用哪些IP地址建立子流
 
 - **其他开源项目：** [https://github.com/zywe03](https://github.com/zywe03)
 - **作者主页：** [https://zywe.de](https://zywe.de)
-- **问题反馈：** [GitHub Issues](https://github.com/zywe03/realm-xwPF/issues)
+- **问题反馈：** [GitHub Issues](https://github.com/AsisYu/realm-xwPF/issues)
 - **纯闲聊群** [tg交流群](https://t.me/zywe_chat) 
 
 ---
 
 **⭐ 如果这个项目对您有帮助，请给个 Star 支持一下！**
 
-[![Star History Chart](https://api.star-history.com/svg?repos=zywe03/realm-xwPF&type=Date)](https://www.star-history.com/#zywe03/realm-xwPF&Date)
+[![Star History Chart](https://api.star-history.com/svg?repos=AsisYu/realm-xwPF&type=Date)](https://www.star-history.com/#AsisYu/realm-xwPF&Date)

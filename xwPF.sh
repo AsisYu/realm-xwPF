@@ -360,16 +360,23 @@ check_netcat_compatible() {
             continue
         fi
 
-        # 方法1: 检查help输出
+        # 方法1: 直接功能测试 -z 选项 (最可靠)
+        # 测试连接到本地不存在的端口，-z选项应该被正确识别
+        local test_result=0
+        timeout 2 "$candidate" -z -w1 127.0.0.1 99999 >/dev/null 2>&1
+        test_result=$?
+
+        # 退出码1表示连接失败(正常), 0也可能表示成功识别-z
+        # 如果是无法识别-z选项，通常会退出码2或更高
+        if [ $test_result -eq 0 ] || [ $test_result -eq 1 ]; then
+            NETCAT_CMD="$candidate"
+            return 0
+        fi
+
+        # 方法2: 检查help输出 (备用方法)
         local help_output
         help_output=$("$candidate" -h 2>&1 || "$candidate" --help 2>&1 || true)
-        if echo "$help_output" | grep -q -- "-z"; then
-            # 方法2: 实际测试-z功能 (测试一个不存在的端口，应该立即失败)
-            if timeout 2 "$candidate" -z -w1 127.0.0.1 99999 >/dev/null 2>&1; then
-                # 不应该成功连接，但不报错说明-z支持正常
-                :
-            fi
-            # 无论测试结果如何，只要有-z选项就接受
+        if echo "$help_output" | grep -qE "(^|[[:space:]])-z([[:space:]]|$)"; then
             NETCAT_CMD="$candidate"
             return 0
         fi
@@ -420,7 +427,7 @@ manage_dependencies() {
         if [ "$mode" = "check" ]; then
             echo -e "${RED}错误: 缺少必备工具: ${missing_tools[*]}${NC}"
             echo -e "${YELLOW}请先选择菜单选项1进行安装，或手动运行安装命令:${NC}"
-            echo -e "${BLUE}curl -fsSL https://raw.githubusercontent.com/zywe03/realm-xwPF/main/xwPF.sh | sudo bash -s install${NC}"
+            echo -e "${BLUE}curl -fsSL https://raw.githubusercontent.com/AsisYu/realm-xwPF/main/xwPF.sh | sudo bash -s install${NC}"
             exit 1
         elif [ "$mode" = "install" ]; then
             echo -e "${YELLOW}需要安装以下工具: ${missing_tools[*]}${NC}"
@@ -2412,7 +2419,7 @@ import_config_package() {
 
 # 每次更新OCR脚本
 download_realm_ocr_script() {
-    local script_url="https://raw.githubusercontent.com/zywe03/realm-xwPF/main/xw_realm_OCR.sh"
+    local script_url="https://raw.githubusercontent.com/AsisYu/realm-xwPF/main/xw_realm_OCR.sh"
     local target_path="/etc/realm/xw_realm_OCR.sh"
 
     echo -e "${GREEN}正在下载最新realm配置识别脚本...${NC}"
@@ -6256,7 +6263,7 @@ generate_systemd_service() {
     cat > "$SYSTEMD_PATH" <<EOF
 [Unit]
 Description=Realm TCP Relay Service
-Documentation=https://github.com/zywe03/realm-xwPF
+Documentation=https://github.com/AsisYu/realm-xwPF
 After=network.target nss-lookup.target
 Wants=network.target
 
@@ -6326,12 +6333,12 @@ self_install() {
         echo -e "${GREEN}✓ 检测到系统已安装脚本，正在更新...${NC}"
 
         echo -e "${BLUE}正在从GitHub下载最新脚本...${NC}"
-        local base_script_url="https://raw.githubusercontent.com/zywe03/realm-xwPF/main/xwPF.sh"
+        local base_script_url="https://raw.githubusercontent.com/AsisYu/realm-xwPF/main/xwPF.sh"
 
         if download_from_sources "$base_script_url" "${install_dir}/${script_name}"; then
             chmod +x "${install_dir}/${script_name}"
         else
-            echo -e "${RED}✗ 脚本更新失败，手动更新wget -qO- https://raw.githubusercontent.com/zywe03/realm-xwPF/main/xwPF.sh | sudo bash -s install${NC}"
+            echo -e "${RED}✗ 脚本更新失败，手动更新wget -qO- https://raw.githubusercontent.com/AsisYu/realm-xwPF/main/xwPF.sh | sudo bash -s install${NC}"
             echo -e "${BLUE}使用现有脚本版本${NC}"
         fi
     elif [ -f "$0" ]; then
@@ -6342,7 +6349,7 @@ self_install() {
     else
         # 如果是通过管道运行的，需要重新下载
         echo -e "${BLUE}正在从GitHub下载脚本...${NC}"
-        local base_script_url="https://raw.githubusercontent.com/zywe03/realm-xwPF/main/xwPF.sh"
+        local base_script_url="https://raw.githubusercontent.com/AsisYu/realm-xwPF/main/xwPF.sh"
 
         if download_from_sources "$base_script_url" "${install_dir}/${script_name}"; then
             chmod +x "${install_dir}/${script_name}"
@@ -7000,7 +7007,7 @@ get_gmt8_time() {
 
 # 下载故障转移管理脚本
 download_failover_script() {
-    local script_url="https://raw.githubusercontent.com/zywe03/realm-xwPF/main/xwFailover.sh"
+    local script_url="https://raw.githubusercontent.com/AsisYu/realm-xwPF/main/xwFailover.sh"
     local target_path="/etc/realm/xwFailover.sh"
 
     echo -e "${GREEN}正在下载最新故障转移脚本...${NC}"
@@ -7018,7 +7025,7 @@ download_failover_script() {
 
 # 下载中转网络链路测试脚本
 download_speedtest_script() {
-    local script_url="https://raw.githubusercontent.com/zywe03/realm-xwPF/main/speedtest.sh"
+    local script_url="https://raw.githubusercontent.com/AsisYu/realm-xwPF/main/speedtest.sh"
     local target_path="/etc/realm/speedtest.sh"
 
     echo -e "${GREEN}正在下载最新测速脚本...${NC}"
@@ -7067,7 +7074,7 @@ failover_management_menu() {
 
 # 端口流量狗
 port_traffic_dog_menu() {
-    local script_url="https://raw.githubusercontent.com/zywe03/realm-xwPF/main/port-traffic-dog.sh"
+    local script_url="https://raw.githubusercontent.com/AsisYu/realm-xwPF/main/port-traffic-dog.sh"
     local dog_script="/usr/local/bin/port-traffic-dog.sh"
 
     # 脚本不存在或不可执行时才下载
@@ -7094,7 +7101,7 @@ show_menu() {
         clear
         echo -e "${GREEN}=== xwPF Realm全功能一键脚本 $SCRIPT_VERSION ===${NC}"
         echo -e "${GREEN}作者主页:https://zywe.de${NC}"
-        echo -e "${GREEN}项目开源:https://github.com/zywe03/realm-xwPF${NC}"
+        echo -e "${GREEN}项目开源:https://github.com/AsisYu/realm-xwPF${NC}"
         echo -e "${GREEN}一个开箱即用、轻量可靠、灵活可控的 Realm 转发管理工具${NC}"
         echo -e "${GREEN}官方realm的全部功能+故障转移 | 快捷命令: pf${NC}"
 

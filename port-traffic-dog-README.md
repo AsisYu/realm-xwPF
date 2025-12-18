@@ -56,12 +56,12 @@
 
 ### 方式一：直接安装
 ```bash
-wget -O port-traffic-dog.sh https://raw.githubusercontent.com/zywe03/realm-xwPF/main/port-traffic-dog.sh && chmod +x port-traffic-dog.sh && ./port-traffic-dog.sh
+wget -O port-traffic-dog.sh https://raw.githubusercontent.com/AsisYu/realm-xwPF/main/port-traffic-dog.sh && chmod +x port-traffic-dog.sh && ./port-traffic-dog.sh
 ```
 
 ### 方式二：使用加速源
 ```bash
-wget -O port-traffic-dog.sh https://ghfast.top/https://raw.githubusercontent.com/zywe03/realm-xwPF/main/port-traffic-dog.sh && chmod +x port-traffic-dog.sh && ./port-traffic-dog.sh
+wget -O port-traffic-dog.sh https://ghfast.top/https://raw.githubusercontent.com/AsisYu/realm-xwPF/main/port-traffic-dog.sh && chmod +x port-traffic-dog.sh && ./port-traffic-dog.sh
 ```
 
 ## 系统要求
@@ -116,4 +116,4 @@ wget -O port-traffic-dog.sh https://ghfast.top/https://raw.githubusercontent.com
 
 ## 开源协议
 
-本项目基于MIT协议开源，详见 [LICENSE](https://github.com/zywe03/realm-xwPF/blob/main/LICENSE) 文件。
+本项目基于MIT协议开源，详见 [LICENSE](https://github.com/AsisYu/realm-xwPF/blob/main/LICENSE) 文件。
