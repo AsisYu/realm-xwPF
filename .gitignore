@@ -1,0 +1,24 @@
+# Claude Code 相关文件
+CLAUDE.md
+.claude/
+*.md.backup
+
+# 临时文件和编辑器
+*.swp
+*.swo
+*~
+.DS_Store
+*.tmp
+
+# 日志文件
+*.log
+
+# 测试文件
+test/
+tests/
+*.test.sh
+
+# 本地配置（如果有）
+.env
+.env.local
+config.local.*

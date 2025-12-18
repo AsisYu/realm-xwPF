@@ -16,6 +16,37 @@ readonly BLUE='\033[0;34m'
 readonly GREEN='\033[0;32m'
 readonly NC='\033[0m'
 
+OS=""
+VER=""
+OS_FAMILY=""
+OS_VERSION=""
+
+declare -A PKG_MAP_DEBIAN=(
+    ["nft"]="nftables"
+    ["tc"]="iproute2"
+    ["ss"]="iproute2"
+    ["jq"]="jq"
+    ["awk"]="gawk"
+    ["bc"]="bc"
+    ["cron"]="cron"
+    ["unzip"]="unzip"
+    ["nc"]="netcat-openbsd"
+    ["inotify-tools"]="inotify-tools"
+)
+
+declare -A PKG_MAP_RHEL=(
+    ["nft"]="nftables"
+    ["tc"]="iproute"
+    ["ss"]="iproute"
+    ["jq"]="jq"
+    ["awk"]="gawk"
+    ["bc"]="bc"
+    ["cron"]="cronie"
+    ["unzip"]="unzip"
+    ["nc"]="nmap-ncat"
+    ["inotify-tools"]="inotify-tools"
+)
+
 # 多源下载策略
 readonly DOWNLOAD_SOURCES=(
     ""
@@ -31,73 +62,264 @@ readonly SCRIPT_URL="https://raw.githubusercontent.com/AsisYu/realm-xwPF/main/po
 readonly SHORTCUT_COMMAND="dog"
 
 detect_system() {
-    # Ubuntu优先检测：避免Debian系统误判
-    if [ -f /etc/lsb-release ] && grep -q "Ubuntu" /etc/lsb-release 2>/dev/null; then
-        echo "ubuntu"
+    if [ -n "$OS_FAMILY" ]; then
+        return 0
+    fi
+
+    OS=""
+    VER=""
+    OS_VERSION=""
+    local os_id=""
+    local id_like=""
+
+    if [ -r /etc/os-release ]; then
+        . /etc/os-release
+        os_id=$(echo "${ID:-}" | tr '[:upper:]' '[:lower:]')
+        id_like=$(echo "${ID_LIKE:-}" | tr '[:upper:]' '[:lower:]')
+        OS=${NAME:-${ID:-"Unknown"}}
+        VER=${VERSION_ID:-${VERSION:-$(uname -r)}}
+        OS_VERSION="$VER"
+    elif type lsb_release >/dev/null 2>&1; then
+        OS=$(lsb_release -si)
+        VER=$(lsb_release -sr)
+        OS_VERSION="$VER"
+        os_id=$(echo "$OS" | tr '[:upper:]' '[:lower:]')
+    else
+        OS=$(uname -s)
+        VER=$(uname -r)
+        OS_VERSION="$VER"
+        os_id=$(echo "$OS" | tr '[:upper:]' '[:lower:]')
+    fi
+
+    if [[ "$os_id" =~ (ubuntu|debian|linuxmint|kali|raspbian) ]] || [[ "$id_like" == *"debian"* ]]; then
+        OS_FAMILY="debian"
+    elif [[ "$os_id" =~ (centos|rhel|rocky|almalinux|fedora) ]] || [[ "$id_like" == *"rhel"* ]] || [[ "$id_like" == *"centos"* ]] || [[ "$id_like" == *"fedora"* ]]; then
+        OS_FAMILY="rhel"
+    else
+        echo -e "${RED}错误: 当前系统不受支持${NC}"
+        echo -e "${YELLOW}检测到系统: $OS $VER${NC}"
+        echo -e "${YELLOW}支持的系统: Debian/Ubuntu 系列, CentOS/RHEL 7-9, Rocky Linux, AlmaLinux${NC}"
+        exit 1
+    fi
+
+    if [ "$OS_FAMILY" = "rhel" ]; then
+        local major="${OS_VERSION%%.*}"
+        if ! [[ "$major" =~ ^[0-9]+$ ]]; then
+            major=0
+        fi
+
+        if [ "$major" -lt 7 ]; then
+            echo -e "${RED}错误: 检测到 $OS $OS_VERSION (CentOS/RHEL 6 系列)${NC}"
+            echo -e "${YELLOW}该版本缺少必要组件 (systemd, nftables)，脚本最低要求: CentOS/RHEL 7+, Rocky Linux/AlmaLinux 8+${NC}"
+            exit 1
+        fi
+    fi
+}
+
+get_rhel_pkg_manager() {
+    if command -v dnf >/dev/null 2>&1; then
+        echo "dnf"
+    elif command -v yum >/dev/null 2>&1; then
+        echo "yum"
+    elif command -v microdnf >/dev/null 2>&1; then
+        echo "microdnf"
+    else
+        echo ""
+    fi
+}
+
+pkg_update() {
+    if [ "$OS_FAMILY" = "debian" ]; then
+        apt-get update -qq
+        return $?
+    fi
+
+    local manager
+    manager=$(get_rhel_pkg_manager)
+    if [ -z "$manager" ]; then
+        echo -e "${RED}错误: 未找到可用的包管理器 (dnf/yum)${NC}"
+        return 1
+    fi
+
+    if [ "$manager" = "microdnf" ]; then
+        "$manager" update -y
+    else
+        "$manager" makecache -q
+    fi
+}
+
+pkg_install() {
+    local package="$1"
+
+    if [ "$OS_FAMILY" = "debian" ]; then
+        DEBIAN_FRONTEND=noninteractive apt-get install -y "$package"
+        return $?
+    fi
+
+    local manager
+    manager=$(get_rhel_pkg_manager)
+    if [ -z "$manager" ]; then
+        echo -e "${RED}错误: 未找到可用的包管理器 (dnf/yum)${NC}"
+        return 1
+    fi
+
+    "$manager" install -y "$package"
+}
+
+pkg_check() {
+    local package="$1"
+
+    if [ "$OS_FAMILY" = "debian" ]; then
+        dpkg -s "$package" >/dev/null 2>&1
+    else
+        rpm -q "$package" >/dev/null 2>&1
+    fi
+}
+
+requires_epel() {
+    local tool="$1"
+    case "$tool" in
+        "jq"|"inotify-tools")
+            return 0
+            ;;
+        *)
+            return 1
+            ;;
+    esac
+}
+
+enable_epel() {
+    if [ "$OS_FAMILY" != "rhel" ]; then
+        return 0
+    fi
+
+    local major="${OS_VERSION%%.*}"
+    if ! [[ "$major" =~ ^[0-9]+$ ]]; then
+        major=0
+    fi
+
+    if [ "$major" -ge 9 ]; then
+        return 0
+    fi
+
+    if rpm -q epel-release >/dev/null 2>&1; then
+        return 0
+    fi
+
+    echo -e "${BLUE}检测到需要 EPEL 仓库 (用于 jq, inotify-tools), 正在启用...${NC}"
+    if pkg_install "epel-release"; then
+        pkg_update >/dev/null 2>&1 || true
+        return 0
+    fi
+
+    echo -e "${RED}✗ 无法启用 EPEL 仓库${NC}"
+    echo -e "${YELLOW}请手动运行: yum install -y epel-release${NC}"
+    return 1
+}
+
+get_package_name() {
+    local tool="$1"
+
+    if [ "$OS_FAMILY" = "rhel" ]; then
+        echo "${PKG_MAP_RHEL[$tool]:-$tool}"
+    else
+        echo "${PKG_MAP_DEBIAN[$tool]:-$tool}"
+    fi
+}
+
+get_cron_service_name() {
+    if [ "$OS_FAMILY" = "rhel" ]; then
+        echo "crond"
+    else
+        echo "cron"
+    fi
+}
+
+is_cron_available() {
+    if command -v cron >/dev/null 2>&1 || command -v crond >/dev/null 2>&1; then
+        return 0
+    fi
+
+    if [ -x /usr/sbin/cron ] || [ -x /usr/sbin/crond ]; then
+        return 0
+    fi
+
+    return 1
+}
+
+print_nftables_install_hint() {
+    if [ "$OS_FAMILY" != "rhel" ]; then
         return
     fi
 
-    if [ -f /etc/debian_version ]; then
-        echo "debian"
-        return
+    local major="${OS_VERSION%%.*}"
+    if ! [[ "$major" =~ ^[0-9]+$ ]]; then
+        major=0
     fi
 
-    echo "unknown"
+    if [ "$major" -eq 7 ]; then
+        echo -e "${YELLOW}CentOS 7 提示: 默认仓库可能缺少 nftables，请启用 extras/EPEL 并运行 yum install -y nftables，或升级到支持 nftables 的内核${NC}"
+    else
+        echo -e "${YELLOW}请确认已启用包含 nftables 的仓库 (dnf install -y nftables)${NC}"
+    fi
 }
 
 install_missing_tools() {
     local missing_tools=("$@")
-    local system_type=$(detect_system)
+    if [ ${#missing_tools[@]} -eq 0 ]; then
+        return 0
+    fi
+
+    detect_system
 
     echo -e "${YELLOW}检测到缺少工具: ${missing_tools[*]}${NC}"
     echo "正在自动安装..."
 
-    case $system_type in
-        "ubuntu")
-            apt update -qq
-            for tool in "${missing_tools[@]}"; do
-                case $tool in
-                    "nft") apt install -y nftables ;;
-                    "tc") apt install -y iproute2 ;;
-                    "ss") apt install -y iproute2 ;;
-                    "jq") apt install -y jq ;;
-                    "awk") apt install -y gawk ;;
-                    "bc") apt install -y bc ;;
-                    "cron")
-                        apt install -y cron
-                        systemctl enable cron 2>/dev/null || true
-                        systemctl start cron 2>/dev/null || true
-                        ;;
-                    *) apt install -y "$tool" ;;
-                esac
-            done
-            ;;
-        "debian")
-            apt-get update -qq
-            for tool in "${missing_tools[@]}"; do
-                case $tool in
-                    "nft") apt-get install -y nftables ;;
-                    "tc") apt-get install -y iproute2 ;;
-                    "ss") apt-get install -y iproute2 ;;
-                    "jq") apt-get install -y jq ;;
-                    "awk") apt-get install -y gawk ;;
-                    "bc") apt-get install -y bc ;;
-                    "cron")
-                        apt-get install -y cron
-                        systemctl enable cron 2>/dev/null || true
-                        systemctl start cron 2>/dev/null || true
-                        ;;
-                    *) apt-get install -y "$tool" ;;
-                esac
-            done
-            ;;
-        *)
-            echo -e "${RED}不支持的系统类型: $system_type${NC}"
-            echo "支持的系统: Ubuntu, Debian"
+    local require_epel="false"
+    if [ "$OS_FAMILY" = "rhel" ]; then
+        for tool in "${missing_tools[@]}"; do
+            if requires_epel "$tool"; then
+                require_epel="true"
+                break
+            fi
+        done
+
+        if [ "$require_epel" = "true" ] && ! enable_epel; then
+            echo -e "${RED}依赖安装失败：无法启用 EPEL 仓库${NC}"
             echo "请手动安装: ${missing_tools[*]}"
             exit 1
-            ;;
-    esac
+        fi
+    fi
+
+    if ! pkg_update; then
+        echo -e "${RED}错误: 包索引更新失败，请检查网络或软件源配置${NC}"
+        exit 1
+    fi
+
+    for tool in "${missing_tools[@]}"; do
+        local pkg_name
+        pkg_name=$(get_package_name "$tool")
+
+        if pkg_check "$pkg_name"; then
+            continue
+        fi
+
+        if ! pkg_install "$pkg_name"; then
+            echo -e "${RED}安装失败: $tool (包: $pkg_name)${NC}"
+            if [ "$tool" = "nft" ]; then
+                print_nftables_install_hint
+            fi
+            echo "请手动安装: ${missing_tools[*]}"
+            exit 1
+        fi
+
+        if [ "$tool" = "cron" ]; then
+            local cron_service
+            cron_service=$(get_cron_service_name)
+            systemctl enable "$cron_service" 2>/dev/null || true
+            systemctl start "$cron_service" 2>/dev/null || true
+        fi
+    done
 
     echo -e "${GREEN}依赖工具安装完成${NC}"
 }
@@ -108,7 +330,11 @@ check_dependencies() {
     local required_tools=("nft" "tc" "ss" "jq" "awk" "bc" "unzip" "cron")
 
     for tool in "${required_tools[@]}"; do
-        if ! command -v "$tool" >/dev/null 2>&1; then
+        if [ "$tool" = "cron" ]; then
+            if ! is_cron_available; then
+                missing_tools+=("$tool")
+            fi
+        elif ! command -v "$tool" >/dev/null 2>&1; then
             missing_tools+=("$tool")
         fi
     done
@@ -118,8 +344,15 @@ check_dependencies() {
 
         local still_missing=()
         for tool in "${missing_tools[@]}"; do
-            if ! command -v "$tool" >/dev/null 2>&1; then
+            if [ "$tool" = "cron" ]; then
+                if ! is_cron_available; then
+                    still_missing+=("$tool")
+                fi
+            elif ! command -v "$tool" >/dev/null 2>&1; then
                 still_missing+=("$tool")
+                if [ "$tool" = "nft" ]; then
+                    print_nftables_install_hint
+                fi
             fi
         done
 
