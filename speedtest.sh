@@ -134,16 +134,232 @@ check_root() {
     fi
 }
 
+# 系统信息变量
+OS=""
+VER=""
+OS_FAMILY=""
+OS_VERSION=""
+
 # 工具配置数组 - 定义所有需要的工具
 declare -A REQUIRED_TOOLS=(
-    ["iperf3"]="apt:iperf3"
-    ["hping3"]="apt:hping3"
-    ["bc"]="apt:bc"
-    ["nc"]="apt:netcat-openbsd"
+    ["iperf3"]="iperf3"
+    ["hping3"]="hping3"
+    ["bc"]="bc"
+    ["nc"]="nc"
+)
+
+# 不同系统的包名映射 - Debian/Ubuntu 系列
+declare -A PKG_MAP_DEBIAN=(
+    ["iperf3"]="iperf3"
+    ["hping3"]="hping3"
+    ["bc"]="bc"
+    ["nc"]="netcat-openbsd"
+)
+
+# 不同系统的包名映射 - CentOS/RHEL 系列
+declare -A PKG_MAP_RHEL=(
+    ["iperf3"]="iperf3"
+    ["hping3"]="hping3"
+    ["bc"]="bc"
+    ["nc"]="nmap-ncat"
 )
 
 # 工具状态数组
 declare -A TOOL_STATUS=()
+
+# 检测操作系统类型和版本
+detect_system() {
+    if [ -n "$OS_FAMILY" ]; then
+        return 0
+    fi
+
+    OS=""
+    VER=""
+    OS_VERSION=""
+    local os_id=""
+    local id_like=""
+
+    # 优先使用 /etc/os-release
+    if [ -r /etc/os-release ]; then
+        . /etc/os-release
+        os_id=$(echo "${ID:-}" | tr '[:upper:]' '[:lower:]')
+        id_like=$(echo "${ID_LIKE:-}" | tr '[:upper:]' '[:lower:]')
+        OS=${NAME:-${ID:-"Unknown"}}
+        VER=${VERSION_ID:-${VERSION:-$(uname -r)}}
+        OS_VERSION="$VER"
+    elif type lsb_release >/dev/null 2>&1; then
+        OS=$(lsb_release -si)
+        VER=$(lsb_release -sr)
+        OS_VERSION="$VER"
+        os_id=$(echo "$OS" | tr '[:upper:]' '[:lower:]')
+    else
+        OS=$(uname -s)
+        VER=$(uname -r)
+        OS_VERSION="$VER"
+        os_id=$(echo "$OS" | tr '[:upper:]' '[:lower:]')
+    fi
+
+    # 识别 Debian/Ubuntu 系列
+    if [[ "$os_id" =~ (ubuntu|debian|linuxmint|kali|raspbian) ]] || [[ "$id_like" == *"debian"* ]]; then
+        OS_FAMILY="debian"
+    # 识别 CentOS/RHEL 系列
+    elif [[ "$os_id" =~ (centos|rhel|rocky|almalinux|fedora) ]] || [[ "$id_like" == *"rhel"* ]] || [[ "$id_like" == *"centos"* ]] || [[ "$id_like" == *"fedora"* ]]; then
+        OS_FAMILY="rhel"
+    else
+        echo -e "${RED}错误: 当前系统不受支持${NC}"
+        echo -e "${YELLOW}检测到系统: $OS $VER${NC}"
+        echo -e "${YELLOW}支持的系统: Debian/Ubuntu 系列, CentOS/RHEL 7-9, Rocky Linux, AlmaLinux${NC}"
+        exit 1
+    fi
+
+    # 检查 RHEL 系列版本
+    if [ "$OS_FAMILY" = "rhel" ]; then
+        local major="${OS_VERSION%%.*}"
+        if ! [[ "$major" =~ ^[0-9]+$ ]]; then
+            major=0
+        fi
+
+        if [ "$major" -lt 7 ]; then
+            echo -e "${RED}错误: 检测到 $OS $OS_VERSION (CentOS/RHEL 6 系列)${NC}"
+            echo -e "${YELLOW}脚本最低要求: CentOS/RHEL 7+, Rocky Linux, AlmaLinux${NC}"
+            exit 1
+        fi
+    fi
+}
+
+# 获取 RHEL 系列的包管理器
+get_rhel_pkg_manager() {
+    if command -v dnf >/dev/null 2>&1; then
+        echo "dnf"
+    elif command -v yum >/dev/null 2>&1; then
+        echo "yum"
+    elif command -v microdnf >/dev/null 2>&1; then
+        echo "microdnf"
+    else
+        echo ""
+    fi
+}
+
+# 更新包索引
+pkg_update() {
+    detect_system
+
+    if [ "$OS_FAMILY" = "debian" ]; then
+        DEBIAN_FRONTEND=noninteractive apt-get update -qq
+        return $?
+    fi
+
+    local manager
+    manager=$(get_rhel_pkg_manager)
+    if [ -z "$manager" ]; then
+        echo -e "${RED}错误: 未找到可用的包管理器 (dnf/yum)${NC}"
+        return 1
+    fi
+
+    if [ "$manager" = "microdnf" ]; then
+        "$manager" update -y
+    else
+        "$manager" makecache -q
+    fi
+}
+
+# 安装软件包
+pkg_install() {
+    local package="$1"
+    detect_system
+
+    if [ "$OS_FAMILY" = "debian" ]; then
+        DEBIAN_FRONTEND=noninteractive apt-get install -y "$package"
+        return $?
+    fi
+
+    local manager
+    manager=$(get_rhel_pkg_manager)
+    if [ -z "$manager" ]; then
+        echo -e "${RED}错误: 未找到可用的包管理器 (dnf/yum)${NC}"
+        return 1
+    fi
+
+    "$manager" install -y "$package"
+}
+
+# 检查软件包是否已安装
+pkg_check() {
+    local package="$1"
+    detect_system
+
+    if [ "$OS_FAMILY" = "debian" ]; then
+        dpkg -s "$package" >/dev/null 2>&1
+    else
+        rpm -q "$package" >/dev/null 2>&1
+    fi
+}
+
+# 检查工具是否需要 EPEL 仓库
+requires_epel() {
+    local tool="$1"
+
+    # 在 CentOS/RHEL 7-8 上，iperf3 和 hping3 都需要 EPEL
+    # 在 CentOS Stream 9 上，hping3 仍需要 EPEL
+    case "$tool" in
+        "iperf3")
+            # iperf3 在 RHEL 7-8 需要 EPEL，9+ 已包含
+            local major="${OS_VERSION%%.*}"
+            if ! [[ "$major" =~ ^[0-9]+$ ]]; then
+                major=0
+            fi
+            if [ "$major" -lt 9 ]; then
+                return 0
+            fi
+            ;;
+        "hping3")
+            # hping3 在所有 RHEL 版本都需要 EPEL
+            return 0
+            ;;
+    esac
+    return 1
+}
+
+# 启用 EPEL 仓库（仅 RHEL 系列）
+enable_epel() {
+    detect_system
+
+    if [ "$OS_FAMILY" != "rhel" ]; then
+        return 0
+    fi
+
+    # 检查 EPEL 是否已安装
+    if rpm -q epel-release >/dev/null 2>&1; then
+        return 0
+    fi
+
+    echo -e "${BLUE}检测到需要 EPEL 仓库，正在启用...${NC}"
+    if pkg_install "epel-release" >/dev/null 2>&1; then
+        pkg_update >/dev/null 2>&1 || true
+        return 0
+    fi
+
+    echo -e "${RED}✗ 无法启用 EPEL 仓库${NC}"
+    local major="${OS_VERSION%%.*}"
+    if [ "$major" = "9" ]; then
+        echo -e "${YELLOW}请手动运行: dnf install -y epel-release${NC}"
+    else
+        echo -e "${YELLOW}请手动运行: yum install -y epel-release${NC}"
+    fi
+    return 1
+}
+
+# 根据系统获取正确的包名
+get_package_name() {
+    local tool="$1"
+    detect_system
+
+    if [ "$OS_FAMILY" = "rhel" ]; then
+        echo "${PKG_MAP_RHEL[$tool]:-$tool}"
+    else
+        echo "${PKG_MAP_DEBIAN[$tool]:-$tool}"
+    fi
+}
 
 # 检查单个工具是否存在
 check_tool() {
@@ -177,24 +393,6 @@ get_missing_tools() {
 }
 
 
-# 安装单个APT工具
-install_apt_tool() {
-    local tool="$1"
-    local package="$2"
-
-    echo -e "${BLUE}🔧 安装 $tool...${NC}"
-    # 设置非交互模式，防止安装时等待用户确认
-    if DEBIAN_FRONTEND=noninteractive apt-get install -y "$package" >/dev/null 2>&1; then
-        echo -e "${GREEN}✅ $tool 安装成功${NC}"
-        TOOL_STATUS["$tool"]="installed"
-        return 0
-    else
-        echo -e "${RED}✗ $tool 安装失败${NC}"
-        return 1
-    fi
-}
-
-
 # 安装缺失的工具
 install_missing_tools() {
     local missing_tools=($(get_missing_tools))
@@ -203,34 +401,69 @@ install_missing_tools() {
         return 0
     fi
 
+    # 检测操作系统类型
+    detect_system
+
     echo -e "${YELLOW}📦 安装缺失工具: ${missing_tools[*]}${NC}"
 
-    # 更新包列表（非交互模式）
-    DEBIAN_FRONTEND=noninteractive apt-get update >/dev/null 2>&1
+    # RHEL 系列检查是否需要启用 EPEL
+    if [ "$OS_FAMILY" = "rhel" ]; then
+        local require_epel=false
+        for tool in "${missing_tools[@]}"; do
+            if requires_epel "$tool"; then
+                require_epel=true
+                break
+            fi
+        done
 
-    local install_failed=false
+        if [ "$require_epel" = true ] && ! enable_epel; then
+            echo -e "${RED}错误: 依赖安装失败，无法启用 EPEL 仓库${NC}"
+            exit 1
+        fi
+    fi
 
+    # 更新包索引
+    if ! pkg_update >/dev/null 2>&1; then
+        echo -e "${RED}错误: 包索引更新失败，请检查网络或软件源${NC}"
+        exit 1
+    fi
+
+    # 安装各个工具
     for tool in "${missing_tools[@]}"; do
-        local tool_config="${REQUIRED_TOOLS[$tool]}"
-        local install_type="${tool_config%%:*}"
-        local package_name="${tool_config##*:}"
+        local pkg_name
+        pkg_name=$(get_package_name "$tool")
 
-        case "$install_type" in
-            "apt")
-                if ! install_apt_tool "$tool" "$package_name"; then
-                    install_failed=true
-                fi
-                ;;
-            *)
-                echo -e "${RED}✗ 未知的安装类型: $install_type${NC}"
-                install_failed=true
-                ;;
-        esac
+        # 检查包是否已安装
+        if pkg_check "$pkg_name"; then
+            TOOL_STATUS["$tool"]="installed"
+            continue
+        fi
+
+        echo -e "${BLUE}🔧 安装 $tool...${NC}"
+        if pkg_install "$pkg_name" >/dev/null 2>&1; then
+            echo -e "${GREEN}✅ $tool 安装成功${NC}"
+            TOOL_STATUS["$tool"]="installed"
+        else
+            echo -e "${RED}✗ $tool 安装失败${NC}"
+            TOOL_STATUS["$tool"]="missing"
+        fi
     done
 
-    if [ "$install_failed" = false ]; then
-        echo -e "${GREEN}✅ 工具安装完成${NC}"
+    # 重新检测工具状态
+    detect_all_tools
+    local still_missing=($(get_missing_tools))
+    if [ ${#still_missing[@]} -gt 0 ]; then
+        echo -e "${RED}错误: 以下工具仍然缺失: ${still_missing[*]}${NC}"
+        if [ "$OS_FAMILY" = "debian" ]; then
+            echo -e "${YELLOW}请手动运行: apt-get install -y ${still_missing[*]}${NC}"
+        else
+            local manager=$(get_rhel_pkg_manager)
+            echo -e "${YELLOW}请手动运行: $manager install -y ${still_missing[*]}${NC}"
+        fi
+        exit 1
     fi
+
+    echo -e "${GREEN}✅ 工具安装完成${NC}"
 }
 
 # 安装所需工具
@@ -242,6 +475,14 @@ install_required_tools() {
 
     # 安装缺失的工具
     install_missing_tools
+
+    # 再次检测工具状态，确保安装成功
+    detect_all_tools
+    local remaining_tools=($(get_missing_tools))
+    if [ ${#remaining_tools[@]} -gt 0 ]; then
+        echo -e "${RED}错误: 无法安装以下工具: ${remaining_tools[*]}${NC}"
+        exit 1
+    fi
 }
 
 # 验证IP地址格式
