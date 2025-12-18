@@ -23,6 +23,45 @@ RULE_NAME=""
 
 REQUIRED_TOOLS=("curl" "wget" "tar" "grep" "cut" "bc" "jq")
 
+# 系统信息全局变量
+OS=""
+VER=""
+OS_FAMILY=""         # debian 或 rhel
+OS_VERSION=""
+NETCAT_CMD=""        # 检测到的兼容netcat命令
+
+# Debian系包名映射
+declare -A PKG_MAP_DEBIAN=(
+    ["curl"]="curl"
+    ["wget"]="wget"
+    ["tar"]="tar"
+    ["grep"]="grep"
+    ["cut"]="coreutils"
+    ["bc"]="bc"
+    ["jq"]="jq"
+    ["nc"]="netcat-openbsd"
+    ["unzip"]="unzip"
+    ["nftables"]="nftables"
+    ["inotify-tools"]="inotify-tools"
+    ["iproute2"]="iproute2"
+)
+
+# RHEL系包名映射 (CentOS/Rocky/AlmaLinux)
+declare -A PKG_MAP_RHEL=(
+    ["curl"]="curl"
+    ["wget"]="wget"
+    ["tar"]="tar"
+    ["grep"]="grep"
+    ["cut"]="coreutils"
+    ["bc"]="bc"
+    ["jq"]="jq"              # 需要EPEL
+    ["nc"]="nmap-ncat"
+    ["unzip"]="unzip"
+    ["nftables"]="nftables"
+    ["inotify-tools"]="inotify-tools"  # 需要EPEL
+    ["iproute2"]="iproute"
+)
+
 # 通用的字段初始化函数
 init_rule_field() {
     local field_name="$1"
@@ -134,37 +173,230 @@ check_root() {
     fi
 }
 
-# 检测系统类型（仅支持Debian/Ubuntu）
+# 检测系统类型并识别系统家族 (支持Debian/Ubuntu和CentOS/RHEL 7+)
 detect_system() {
-    if [ -f /etc/os-release ]; then
+    OS_FAMILY=""
+    OS_VERSION=""
+    local os_id=""
+    local id_like=""
+
+    # 优先使用 /etc/os-release (systemd标准)
+    if [ -r /etc/os-release ]; then
         . /etc/os-release
-        OS=$NAME
-        VER=$VERSION_ID
+        os_id=$(echo "${ID:-}" | tr '[:upper:]' '[:lower:]')
+        id_like=$(echo "${ID_LIKE:-}" | tr '[:upper:]' '[:lower:]')
+        OS=${NAME:-${ID:-"Unknown"}}
+        VER=${VERSION_ID:-${VERSION:-$(uname -r)}}
+        OS_VERSION="$VER"
     elif type lsb_release >/dev/null 2>&1; then
         OS=$(lsb_release -si)
         VER=$(lsb_release -sr)
+        OS_VERSION="$VER"
+        os_id=$(echo "$OS" | tr '[:upper:]' '[:lower:]')
     else
         OS=$(uname -s)
         VER=$(uname -r)
+        OS_VERSION="$VER"
+        os_id=$(echo "$OS" | tr '[:upper:]' '[:lower:]')
     fi
 
-    if ! command -v apt-get >/dev/null 2>&1; then
-        echo -e "${RED}错误: 当前仅支持 Ubuntu/Debian 系统${NC}"
+    # 识别系统家族
+    if [[ "$os_id" =~ (ubuntu|debian|linuxmint|kali|raspbian) ]] || [[ "$id_like" == *"debian"* ]]; then
+        OS_FAMILY="debian"
+    elif [[ "$os_id" =~ (centos|rhel|rocky|almalinux|fedora) ]] || [[ "$id_like" == *"rhel"* ]] || [[ "$id_like" == *"centos"* ]] || [[ "$id_like" == *"fedora"* ]]; then
+        OS_FAMILY="rhel"
+    else
+        echo -e "${RED}错误: 当前系统不受支持${NC}"
         echo -e "${YELLOW}检测到系统: $OS $VER${NC}"
+        echo -e "${YELLOW}支持的系统: Debian/Ubuntu 系列, CentOS/RHEL 7-9, Rocky Linux, AlmaLinux${NC}"
         exit 1
     fi
+
+    # RHEL系统版本检查：不支持CentOS 6及以下
+    if [ "$OS_FAMILY" = "rhel" ]; then
+        local major="${OS_VERSION%%.*}"
+        if ! [[ "$major" =~ ^[0-9]+$ ]]; then
+            major=0
+        fi
+
+        if [ "$major" -lt 7 ]; then
+            echo -e "${RED}错误: 检测到 $OS $OS_VERSION (CentOS/RHEL 6 系列)${NC}"
+            echo -e "${YELLOW}该版本已停止支持 (EOL 2020)，且缺少必要组件 (systemd, nftables)${NC}"
+            echo -e "${YELLOW}脚本最低要求: CentOS/RHEL 7+, Rocky Linux 8+, AlmaLinux 8+${NC}"
+            exit 1
+        fi
+    fi
+}
+
+# 获取RHEL系包管理器 (dnf优先于yum)
+get_rhel_pkg_manager() {
+    if command -v dnf >/dev/null 2>&1; then
+        echo "dnf"
+    elif command -v yum >/dev/null 2>&1; then
+        echo "yum"
+    elif command -v microdnf >/dev/null 2>&1; then
+        echo "microdnf"
+    else
+        echo ""
+    fi
+}
+
+# 包管理抽象层：更新包索引
+pkg_update() {
+    if [ "$OS_FAMILY" = "debian" ]; then
+        apt-get update -qq >/dev/null 2>&1
+        return $?
+    fi
+
+    local manager
+    manager=$(get_rhel_pkg_manager)
+    if [ -z "$manager" ]; then
+        echo -e "${RED}错误: 未找到可用的包管理器 (dnf/yum)${NC}"
+        return 1
+    fi
+
+    if [ "$manager" = "microdnf" ]; then
+        "$manager" update -y >/dev/null 2>&1
+    else
+        "$manager" makecache -q >/dev/null 2>&1
+    fi
+}
+
+# 包管理抽象层：安装包
+pkg_install() {
+    local package="$1"
+
+    if [ "$OS_FAMILY" = "debian" ]; then
+        DEBIAN_FRONTEND=noninteractive apt-get install -y "$package" >/dev/null 2>&1
+        return $?
+    fi
+
+    local manager
+    manager=$(get_rhel_pkg_manager)
+    if [ -z "$manager" ]; then
+        echo -e "${RED}错误: 未找到可用的包管理器 (dnf/yum)${NC}"
+        return 1
+    fi
+
+    "$manager" install -y "$package" >/dev/null 2>&1
+}
+
+# 包管理抽象层：检查包是否已安装
+pkg_check() {
+    local package="$1"
+
+    if [ "$OS_FAMILY" = "debian" ]; then
+        dpkg -s "$package" >/dev/null 2>&1
+    else
+        rpm -q "$package" >/dev/null 2>&1
+    fi
+}
+
+# 判断工具是否需要EPEL仓库 (仅RHEL系)
+requires_epel() {
+    local tool="$1"
+    case "$tool" in
+        "jq"|"inotify-tools")
+            return 0
+            ;;
+        *)
+            return 1
+            ;;
+    esac
+}
+
+# 启用EPEL仓库 (CentOS 7/8, RHEL 7/8)
+enable_epel() {
+    if [ "$OS_FAMILY" != "rhel" ]; then
+        return 0
+    fi
+
+    local major="${OS_VERSION%%.*}"
+    if ! [[ "$major" =~ ^[0-9]+$ ]]; then
+        major=0
+    fi
+
+    # CentOS Stream 9+ 和 Rocky/Alma 默认包含类EPEL的仓库
+    if [ "$major" -ge 9 ]; then
+        return 0
+    fi
+
+    # CentOS 7/8 需要EPEL
+    if rpm -q epel-release >/dev/null 2>&1; then
+        return 0
+    fi
+
+    echo -e "${BLUE}检测到需要 EPEL 仓库 (用于 jq, inotify-tools), 正在启用...${NC}"
+    if pkg_install "epel-release"; then
+        echo -e "${GREEN}✓ EPEL 仓库已启用${NC}"
+        pkg_update >/dev/null 2>&1 || true
+        return 0
+    fi
+
+    echo -e "${RED}✗ 无法启用 EPEL 仓库${NC}"
+    echo -e "${YELLOW}请手动安装: yum install -y epel-release${NC}"
+    return 1
+}
+
+# 获取工具对应的包名
+get_package_name() {
+    local tool="$1"
+
+    if [ "$OS_FAMILY" = "rhel" ]; then
+        echo "${PKG_MAP_RHEL[$tool]:-$tool}"
+    else
+        echo "${PKG_MAP_DEBIAN[$tool]:-$tool}"
+    fi
+}
+
+# 检测netcat/ncat是否兼容 (-z选项支持)
+check_netcat_compatible() {
+    NETCAT_CMD=""
+    local candidate=""
+
+    # 候选命令：ncat(nmap-ncat), nc
+    for candidate in ncat nc; do
+        if ! command -v "$candidate" >/dev/null 2>&1; then
+            continue
+        fi
+
+        # 方法1: 检查help输出
+        local help_output
+        help_output=$("$candidate" -h 2>&1 || "$candidate" --help 2>&1 || true)
+        if echo "$help_output" | grep -q -- "-z"; then
+            # 方法2: 实际测试-z功能 (测试一个不存在的端口，应该立即失败)
+            if timeout 2 "$candidate" -z -w1 127.0.0.1 99999 >/dev/null 2>&1; then
+                # 不应该成功连接，但不报错说明-z支持正常
+                :
+            fi
+            # 无论测试结果如何，只要有-z选项就接受
+            NETCAT_CMD="$candidate"
+            return 0
+        fi
+    done
+
+    return 1
 }
 
 check_netcat_openbsd() {
-    dpkg -l netcat-openbsd >/dev/null 2>&1
+    # 向后兼容：仍然保留此函数名，但使用新的check_netcat_compatible
+    check_netcat_compatible
     return $?
 }
 
-# 强制使用netcat-openbsd：传统netcat缺少-z选项，会导致端口检测失败
+# 强制使用支持 -z 选项的 netcat：传统 netcat 会导致端口检测失败
 manage_dependencies() {
     local mode="$1"
     local missing_tools=()
+    local tool=""
+    local require_epel="false"
 
+    # 确保系统已检测
+    if [ -z "$OS_FAMILY" ]; then
+        detect_system
+    fi
+
+    # 检查常规工具
     for tool in "${REQUIRED_TOOLS[@]}"; do
         if ! command -v "$tool" >/dev/null 2>&1; then
             missing_tools+=("$tool")
@@ -173,15 +405,17 @@ manage_dependencies() {
         fi
     done
 
-    if ! check_netcat_openbsd; then
+    # 检查netcat兼容性
+    if ! check_netcat_compatible; then
         missing_tools+=("nc")
         if [ "$mode" = "install" ]; then
-            echo -e "${YELLOW}✗${NC} nc 需要安装netcat-openbsd版本"
+            echo -e "${YELLOW}✗${NC} nc 需要支持 -z 选项的兼容版本"
         fi
     elif [ "$mode" = "install" ]; then
-        echo -e "${GREEN}✓${NC} nc (netcat-openbsd) 已安装"
+        echo -e "${GREEN}✓${NC} nc (${NETCAT_CMD}) 已安装"
     fi
 
+    # 如果有缺失工具
     if [ ${#missing_tools[@]} -gt 0 ]; then
         if [ "$mode" = "check" ]; then
             echo -e "${RED}错误: 缺少必备工具: ${missing_tools[*]}${NC}"
@@ -190,22 +424,65 @@ manage_dependencies() {
             exit 1
         elif [ "$mode" = "install" ]; then
             echo -e "${YELLOW}需要安装以下工具: ${missing_tools[*]}${NC}"
-            echo -e "${BLUE}使用 apt-get 安装依赖,下载中...${NC}"
-            apt-get update -qq >/dev/null 2>&1
 
+            # RHEL系统检查是否需要EPEL
+            if [ "$OS_FAMILY" = "rhel" ]; then
+                for tool in "${missing_tools[@]}"; do
+                    if requires_epel "$tool"; then
+                        require_epel="true"
+                        break
+                    fi
+                done
+
+                if [ "$require_epel" = "true" ] && ! enable_epel; then
+                    echo -e "${RED}✗ EPEL 仓库启用失败，无法继续安装${NC}"
+                    exit 1
+                fi
+            fi
+
+            echo -e "${BLUE}使用包管理器安装依赖，请稍候...${NC}"
+
+            # 更新包索引
+            if ! pkg_update; then
+                echo -e "${RED}✗ 包索引更新失败，请检查网络连接或镜像源${NC}"
+                exit 1
+            fi
+
+            # 逐个安装缺失工具
             for tool in "${missing_tools[@]}"; do
-                case "$tool" in
-                    "curl") apt-get install -y curl >/dev/null 2>&1 && echo -e "${GREEN}✓${NC} curl 安装成功" ;;
-                    "wget") apt-get install -y wget >/dev/null 2>&1 && echo -e "${GREEN}✓${NC} wget 安装成功" ;;
-                    "tar") apt-get install -y tar >/dev/null 2>&1 && echo -e "${GREEN}✓${NC} tar 安装成功" ;;
-                    "bc") apt-get install -y bc >/dev/null 2>&1 && echo -e "${GREEN}✓${NC} bc 安装成功" ;;
-                    "jq") apt-get install -y jq >/dev/null 2>&1 && echo -e "${GREEN}✓${NC} jq 安装成功" ;;
-                    "nc")
-                        apt-get remove -y netcat-traditional >/dev/null 2>&1
-                        apt-get install -y netcat-openbsd >/dev/null 2>&1 && echo -e "${GREEN}✓${NC} nc (netcat-openbsd) 安装成功"
-                        ;;
-                esac
+                local pkg_name
+                pkg_name=$(get_package_name "$tool")
+
+                # 检查包是否已安装
+                if pkg_check "$pkg_name"; then
+                    echo -e "${GREEN}✓${NC} $tool 已安装 (包: $pkg_name)"
+                    continue
+                fi
+
+                # 安装包
+                if pkg_install "$pkg_name"; then
+                    # Debian系统netcat特殊处理：确保使用openbsd版本
+                    if [ "$tool" = "nc" ] && [ "$OS_FAMILY" = "debian" ]; then
+                        # 移除传统netcat避免冲突
+                        pkg_check "netcat-traditional" && apt-get remove -y netcat-traditional >/dev/null 2>&1 || true
+                        # 设置alternatives
+                        update-alternatives --set nc /bin/nc.openbsd >/dev/null 2>&1 || true
+                    fi
+                    echo -e "${GREEN}✓${NC} $tool 安装成功"
+                else
+                    echo -e "${RED}✗${NC} $tool 安装失败 (包: $pkg_name)"
+                    echo -e "${YELLOW}提示: 请检查网络连接和软件源配置${NC}"
+                    exit 1
+                fi
             done
+
+            # 重新检测netcat命令
+            if [[ " ${missing_tools[*]} " == *" nc "* ]]; then
+                if ! check_netcat_compatible; then
+                    echo -e "${RED}✗ netcat 安装后仍不兼容，请手动检查${NC}"
+                    exit 1
+                fi
+            fi
         fi
     elif [ "$mode" = "install" ]; then
         echo -e "${GREEN}所有必备工具已安装完成${NC}"
@@ -215,6 +492,10 @@ manage_dependencies() {
 }
 
 check_dependencies() {
+    # 确保系统已检测
+    if [ -z "$OS_FAMILY" ]; then
+        detect_system
+    fi
     manage_dependencies "check"
 }
 
@@ -319,14 +600,33 @@ check_connectivity() {
         return 1
     fi
 
-    # TCP检测
-    if nc -z -w"$timeout" "$target" "$port" >/dev/null 2>&1; then
-        return 0
+    # 确保NETCAT_CMD已检测
+    if [ -z "$NETCAT_CMD" ]; then
+        check_netcat_compatible >/dev/null 2>&1 || true
     fi
 
-    # TCP失败则尝试UDP检测
-    nc -z -u -w"$timeout" "$target" "$port" >/dev/null 2>&1
-    return $?
+    # 方法1: 使用netcat进行TCP检测
+    if [ -n "$NETCAT_CMD" ]; then
+        if "$NETCAT_CMD" -z -w"$timeout" "$target" "$port" >/dev/null 2>&1; then
+            return 0
+        fi
+
+        # TCP失败则尝试UDP检测
+        if "$NETCAT_CMD" -z -u -w"$timeout" "$target" "$port" >/dev/null 2>&1; then
+            return 0
+        fi
+    fi
+
+    # 方法2: Fallback到bash内置/dev/tcp (仅IPv4 TCP)
+    # 使用安全的参数传递方式避免命令注入
+    if [[ "$target" != *:* ]] && command -v timeout >/dev/null 2>&1; then
+        # 通过位置参数传递，避免字符串插值
+        if timeout "$timeout" bash -c 'exec 3<>/dev/tcp/"$1"/"$2" && exec 3<&-' _ "$target" "$port" 2>/dev/null; then
+            return 0
+        fi
+    fi
+
+    return 1
 }
 
 validate_port() {
@@ -2486,10 +2786,28 @@ upgrade_iproute2_for_mptcp() {
 
     echo -e "${YELLOW}当前版本不支持MPTCP，开始升级...${NC}"
 
-    echo -e "${BLUE}正在使用包管理器升级...${NC}"
-    local apt_output
-    apt_output=$(apt update 2>&1 && apt install -y iproute2 2>&1)
+    # 确保系统已检测
+    if [ -z "$OS_FAMILY" ]; then
+        detect_system
+    fi
 
+    echo -e "${BLUE}正在使用包管理器升级...${NC}"
+
+    # 获取对应系统的iproute包名
+    local ip_pkg
+    ip_pkg=$(get_package_name "iproute2")
+
+    # 更新包索引
+    if ! pkg_update; then
+        echo -e "${YELLOW}⚠ 包索引更新失败，请检查网络连接后重试${NC}"
+    fi
+
+    # 安装/升级iproute包
+    if ! pkg_install "$ip_pkg"; then
+        echo -e "${YELLOW}⚠ 无法通过包管理器升级 $ip_pkg，请根据系统手动处理${NC}"
+    fi
+
+    # 再次检查MPTCP支持
     local mptcp_help_output=$(/usr/bin/ip mptcp help 2>&1)
     if [ $? -eq 0 ] && echo "$mptcp_help_output" | grep -q "endpoint\|limits"; then
         echo -e "${GREEN}✓ 升级成功，MPTCP现在可用${NC}"
@@ -6881,6 +7199,9 @@ main() {
     fi
 
     check_root
+
+    # 检测系统(在check_dependencies之前)
+    detect_system
 
     case "$1" in
         install)

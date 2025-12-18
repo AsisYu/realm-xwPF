@@ -143,6 +143,47 @@ check_dependencies() {
     done
 }
 
+# 检测nftables可用性 (CentOS 7及以下可能不支持)
+check_nftables_availability() {
+    # 检查nft命令是否存在
+    if ! command -v nft >/dev/null 2>&1; then
+        echo -e "${RED}错误: 未检测到 nft 命令${NC}"
+        echo -e "${YELLOW}端口流量狗需要 nftables 支持，请安装 nftables 包${NC}"
+        if [ -f /etc/os-release ]; then
+            . /etc/os-release
+            local os_id=$(echo "${ID:-}" | tr '[:upper:]' '[:lower:]')
+            if [[ "$os_id" =~ (centos|rhel) ]]; then
+                local major="${VERSION_ID%%.*}"
+                if [ "$major" = "7" ]; then
+                    echo -e "${YELLOW}CentOS 7 提示: yum install -y nftables && systemctl enable nftables && systemctl start nftables${NC}"
+                else
+                    echo -e "${YELLOW}安装提示: yum install -y nftables${NC}"
+                fi
+            fi
+        fi
+        return 1
+    fi
+
+    # 尝试执行nft命令检测内核支持
+    if ! nft list tables >/dev/null 2>&1; then
+        local nft_error
+        nft_error=$(nft list tables 2>&1 || true)
+        echo -e "${RED}错误: nftables 无法正常工作${NC}"
+        if echo "$nft_error" | grep -qi "permission denied"; then
+            echo -e "${YELLOW}提示: 请使用 root 权限运行此脚本${NC}"
+        elif echo "$nft_error" | grep -qi "no such file|cannot open"; then
+            echo -e "${YELLOW}提示: 当前内核不支持 nftables，请升级内核或使用支持 nftables 的系统${NC}"
+            echo -e "${YELLOW}      最低要求: Linux 内核 3.13+, 推荐 4.18+${NC}"
+        else
+            echo -e "${YELLOW}错误详情: $nft_error${NC}"
+        fi
+        return 1
+    fi
+
+    return 0
+}
+
+
 setup_script_permissions() {
     if [ -f "$SCRIPT_PATH" ]; then
         chmod +x "$SCRIPT_PATH" 2>/dev/null || true
@@ -2685,10 +2726,12 @@ send_status_notification() {
 main() {
     check_root
     check_dependencies
+
     init_config
 
     create_shortcut_command
 
+    # 处理命令行参数（维护命令不需要nftables）
     if [ $# -gt 0 ]; then
         case $1 in
             --check-deps)
@@ -2710,10 +2753,20 @@ main() {
                 exit 0
                 ;;
             --send-status)
+                # 发送状态需要nftables检测
+                if ! check_nftables_availability; then
+                    echo -e "${RED}错误: nftables 不可用，无法获取流量统计${NC}"
+                    exit 1
+                fi
                 send_status_notification
                 exit 0
                 ;;
             --send-telegram-status)
+                # 发送状态需要nftables检测
+                if ! check_nftables_availability; then
+                    echo -e "${RED}错误: nftables 不可用，无法获取流量统计${NC}"
+                    exit 1
+                fi
                 local telegram_script="$CONFIG_DIR/notifications/telegram.sh"
                 if [ -f "$telegram_script" ]; then
                     source "$telegram_script"
@@ -2722,6 +2775,11 @@ main() {
                 exit 0
                 ;;
             --send-wecom-status)
+                # 发送状态需要nftables检测
+                if ! check_nftables_availability; then
+                    echo -e "${RED}错误: nftables 不可用，无法获取流量统计${NC}"
+                    exit 1
+                fi
                 local wecom_script="$CONFIG_DIR/notifications/wecom.sh"
                 if [ -f "$wecom_script" ]; then
                     source "$wecom_script"
@@ -2732,6 +2790,11 @@ main() {
             --reset-port)
                 if [ $# -lt 2 ]; then
                     echo -e "${RED}错误：--reset-port 需要指定端口号${NC}"
+                    exit 1
+                fi
+                # 重置端口需要nftables检测
+                if ! check_nftables_availability; then
+                    echo -e "${RED}错误: nftables 不可用，无法重置流量统计${NC}"
                     exit 1
                 fi
                 auto_reset_port "$2"
@@ -2753,6 +2816,14 @@ main() {
                 exit 1
                 ;;
         esac
+    fi
+
+    # 进入交互菜单前检测nftables（CentOS 7等系统可能不支持）
+    if ! check_nftables_availability; then
+        echo ""
+        echo -e "${YELLOW}端口流量监控功能已禁用，请安装并启用 nftables 后重试${NC}"
+        echo -e "${BLUE}提示: 核心 realm 转发功能不依赖 nftables，仍可正常使用${NC}"
+        exit 1
     fi
 
     show_main_menu
